@@ -117,7 +117,12 @@ def fetch_cloudflare_ice_servers(key_id: str, api_token: str, ttl: int) -> list[
     req = urllib.request.Request(
         CLOUDFLARE_TURN_URL.format(key_id=key_id),
         data=json.dumps({"ttl": ttl}).encode(),
-        headers={"Authorization": f"Bearer {api_token}", "Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {api_token}",
+            "Content-Type": "application/json",
+            # Cloudflare rejects the default Python-urllib UA with error 1010.
+            "User-Agent": "opentalking-modal/1.0",
+        },
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=15) as resp:
@@ -130,9 +135,24 @@ def configure_ice() -> None:
     transport = os.environ.get("OT_SERVER_TURN_TRANSPORT", "tls").strip().lower()
     if key_id and api_token:
         ttl = int(os.environ.get("OT_TURN_TTL_SEC", "172800"))
-        servers = fetch_cloudflare_ice_servers(key_id, api_token, ttl)
+        try:
+            servers = fetch_cloudflare_ice_servers(key_id, api_token, ttl)
+        except Exception as exc:  # noqa: BLE001 - keep the WebUI reachable for debugging
+            detail = ""
+            if hasattr(exc, "read"):
+                try:
+                    detail = exc.read().decode(errors="replace")[:300]
+                except Exception:  # noqa: BLE001
+                    pass
+            log(
+                f"ERROR: Cloudflare TURN credential request failed: {exc!r} {detail} "
+                "-- check CLOUDFLARE_TURN_KEY_ID / CLOUDFLARE_TURN_API_TOKEN. "
+                "Continuing without TURN: the page loads but WebRTC video will not connect."
+            )
+            return
         if not servers:
-            raise RuntimeError("Cloudflare TURN returned no ICE servers")
+            log("ERROR: Cloudflare TURN returned no ICE servers; continuing without TURN")
+            return
         os.environ["OPENTALKING_WEBRTC_ICE_SERVERS"] = json.dumps(servers)
         log(
             f"Cloudflare TURN: {sum(len(_as_url_list(s['urls'])) for s in servers)} browser ICE URLs (ttl={ttl}s)"
@@ -224,8 +244,12 @@ def _api_ready() -> bool:
 
 
 def start_services(*, wait_sec: float = 600.0, start_nginx: bool = True) -> list[subprocess.Popen]:
+    t0 = time.time()
+    log("Configuring WebRTC ICE / TURN ...")
     configure_ice()
+    log(f"ICE configured (+{time.time() - t0:.1f}s); seeding avatars ...")
     seed_avatars()
+    log(f"Avatars ready (+{time.time() - t0:.1f}s)")
     procs: list[subprocess.Popen] = []
 
     env = dict(os.environ)
@@ -247,8 +271,11 @@ def start_services(*, wait_sec: float = 600.0, start_nginx: bool = True) -> list
         if procs[0].poll() is not None:
             raise RuntimeError(f"opentalking-unified exited early with code {procs[0].returncode}")
         if _api_ready():
-            log("OpenTalking API is ready")
+            log(f"OpenTalking API is ready (+{time.time() - t0:.1f}s)")
             return procs
+        waited = int(time.time() - t0)
+        if waited and waited % 30 == 0:
+            log(f"... still waiting for OpenTalking API (+{waited}s)")
         time.sleep(1)
     raise TimeoutError(f"OpenTalking API not ready after {wait_sec:.0f}s")
 
