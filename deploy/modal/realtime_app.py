@@ -34,8 +34,11 @@ GPU = None if MODE == "mock" else os.environ.get("OT_GPU", "L4")
 SECRET_NAME = os.environ.get("OT_SECRET_NAME", "opentalking-env")
 APP_NAME = os.environ.get("OT_APP_NAME", f"opentalking-{MODE}")
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
+# Locally this file lives at <repo>/deploy/modal/realtime_app.py. Inside the
+# Modal container it is re-imported from /root/realtime_app.py, where the
+# image definition below is not rebuilt, so any placeholder path works.
+REPO_ROOT = HERE.parents[1] if (HERE.name == "modal" and HERE.parent.name == "deploy") else HERE
 
 # Persistent state: knowledge bases, LightRAG index, memory DBs, exports,
 # uploaded avatars. Mounted at /app/data so the repo's ./data defaults apply.
