@@ -87,3 +87,6 @@ docs/superpowers/
 
 # MkDocs build output
 site/
+
+# Modal deployment secrets
+deploy/modal/secrets.env
